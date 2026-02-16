@@ -167,10 +167,22 @@ class VX7Controller:
         if param == "volume":
             vol = float(value) if value is not None else 0.7
             self.audio.volume = vol
-        elif param == "algorithm_up":
-            self._change_algorithm(1)
-        elif param == "algorithm_down":
-            self._change_algorithm(-1)
+        elif param == "pitch_bend":
+            # value is 0.0-1.0 (0.5 = center)
+            self.synth.set_pitch_bend(float(value))
+        elif param == "mod_wheel":
+            # value is 0.0-1.0 (0.0 = off)
+            self.synth.set_mod_wheel(float(value))
+        elif param == "algorithm":
+            # value is 1-based (1-32) from the GUI
+            algo_0 = int(value) - 1
+            self._set_algorithm(algo_0)
+        elif param.startswith("op") and param.endswith("_enable"):
+            # e.g. "op1_enable" .. "op6_enable"
+            op_num = int(param[2]) - 1  # 0-based
+            self.synth.set_operator_enabled(op_num, bool(value))
+        elif param == "init":
+            self._init_voice()
 
     # ------------------------------------------------------------------
     # Preset management
@@ -189,19 +201,30 @@ class VX7Controller:
         # Update GUI.
         self.gui.update_preset(index, name)
         self.gui.update_algorithm(algo)
+        self.gui.set_patch_number(index + 1)
         self.gui.update_display(
             f"{index + 1:2d} {name:<13s}",
             f"ALGO {algo:2d}  FB {preset['feedback']}",
         )
 
-    def _change_algorithm(self, delta: int) -> None:
-        """Cycle algorithm up or down for the current preset."""
+    def _set_algorithm(self, algo_0based: int) -> None:
+        """Set the algorithm (0-based) for the current preset."""
+        algo_0based = algo_0based % 32
         preset = self._converted_presets[self._current_preset_index]
-        new_algo = (preset["algorithm"] + delta) % 32
-        preset["algorithm"] = new_algo
-        self.synth.load_preset(preset)
-        self.gui.update_algorithm(new_algo + 1)
-        self.gui.update_display_line2(f"ALGO {new_algo + 1:2d}  FB {preset['feedback']}")
+        preset["algorithm"] = algo_0based
+        self.synth.set_algorithm(algo_0based)
+        self.gui.update_algorithm(algo_0based + 1)
+        self.gui.update_display_line2(
+            f"ALGO {algo_0based + 1:2d}  FB {preset['feedback']}"
+        )
+
+    def _init_voice(self) -> None:
+        """Reset to the INIT VOICE preset."""
+        from engine.voice import _default_preset
+        init = _default_preset()
+        self.synth.load_preset(init)
+        self.gui.update_algorithm(1)
+        self.gui.update_display("INIT VOICE", "ALGO  1  FB 0")
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -358,6 +358,7 @@ class Operator:
         num_samples: int,
         modulation: Optional[np.ndarray] = None,
         as_carrier: bool = True,
+        freq_ratio: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Render audio/modulation output for this operator.
 
@@ -371,6 +372,9 @@ class Operator:
         as_carrier : bool
             If True, the output is scaled as a carrier (amplitude 0-1).
             If False, the output is scaled as a modulator (modulation index).
+        freq_ratio : np.ndarray or None
+            Per-sample frequency multiplier for pitch bend / LFO pitch mod.
+            Shape (num_samples,).  None means no pitch modification.
 
         Returns
         -------
@@ -380,12 +384,20 @@ class Operator:
         # Generate envelope.
         env = self.envelope.render(num_samples)
 
-        # Phase increment per sample.
-        phase_inc = 2.0 * math.pi * self._freq / self.sample_rate
+        # Base phase increment per sample.
+        base_phase_inc = 2.0 * math.pi * self._freq / self.sample_rate
 
-        # Build phase ramp.
-        t = np.arange(num_samples, dtype=np.float64)
-        phase = self._phase + phase_inc * t
+        if freq_ratio is not None:
+            # Per-sample varying frequency (pitch bend + LFO mod).
+            phase_incs = base_phase_inc * freq_ratio
+            cum_phase = np.cumsum(phase_incs)
+            phase = self._phase + cum_phase
+            final_phase = float(phase[-1]) if num_samples > 0 else self._phase
+        else:
+            # Constant frequency.
+            t = np.arange(num_samples, dtype=np.float64)
+            phase = self._phase + base_phase_inc * t
+            final_phase = self._phase + base_phase_inc * num_samples
 
         # Apply phase modulation.
         if modulation is not None:
@@ -401,9 +413,7 @@ class Operator:
             output *= env * self._mod_index
 
         # Advance phase accumulator (keep within 0..2pi to avoid float issues).
-        self._phase = float(
-            (self._phase + phase_inc * num_samples) % (2.0 * math.pi)
-        )
+        self._phase = final_phase % (2.0 * math.pi)
 
         return output
 
@@ -412,6 +422,7 @@ class Operator:
         num_samples: int,
         feedback_level: float,
         feedback_buffer: np.ndarray,
+        freq_ratio: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Render with self-feedback (the operator modulates itself).
 
@@ -424,6 +435,8 @@ class Operator:
         feedback_buffer : np.ndarray
             Array of length 2 holding the last two output samples from this
             operator (used to compute the feedback signal).  Updated in-place.
+        freq_ratio : np.ndarray or None
+            Per-sample frequency multiplier for pitch bend / LFO pitch mod.
 
         Returns
         -------
@@ -432,7 +445,7 @@ class Operator:
         """
         env = self.envelope.render(num_samples)
 
-        phase_inc = 2.0 * math.pi * self._freq / self.sample_rate
+        base_phase_inc = 2.0 * math.pi * self._freq / self.sample_rate
 
         output = np.empty(num_samples, dtype=np.float64)
 
@@ -450,7 +463,8 @@ class Operator:
             output[i] = sample
             fb0 = fb1
             fb1 = sample
-            phase += phase_inc
+            fr = freq_ratio[i] if freq_ratio is not None else 1.0
+            phase += base_phase_inc * fr
 
         # Store feedback state.
         feedback_buffer[0] = fb0

@@ -125,8 +125,16 @@ class LFO:
         self._sh_value = 0.0
         self._sh_last_phase = 0.0
 
-    def render(self, num_samples: int) -> tuple[np.ndarray, np.ndarray]:
+    def render(
+        self, num_samples: int, extra_pmd: float = 0.0,
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Generate LFO output for *num_samples*.
+
+        Parameters
+        ----------
+        extra_pmd : float
+            Additional pitch modulation depth (0.0-1.0) added by the mod
+            wheel.  At 1.0 the effective PMD is clamped to 99.
 
         Returns
         -------
@@ -150,8 +158,9 @@ class LFO:
             fade = self._compute_delay_fade(num_samples)
             raw = raw * fade
 
-        # Pitch modulation: bipolar, scaled by PMD / 99.
-        pmd_scale = self.pmd / 99.0
+        # Pitch modulation: bipolar, scaled by effective PMD / 99.
+        effective_pmd = min(99.0, self.pmd + extra_pmd * 99.0)
+        pmd_scale = effective_pmd / 99.0
         pitch_mod = raw * pmd_scale
 
         # Amplitude modulation: convert bipolar waveform to unipolar

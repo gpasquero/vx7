@@ -76,6 +76,40 @@ class Synth:
             voice.load_preset(preset)
 
     # ------------------------------------------------------------------
+    # Real-time controllers
+    # ------------------------------------------------------------------
+
+    # DX7 pitch bend range: +/- 2 semitones (can be customised).
+    PITCH_BEND_RANGE_SEMITONES: float = 2.0
+
+    def set_pitch_bend(self, value: float) -> None:
+        """Set pitch bend from a GUI value (0.0-1.0, 0.5 = center).
+
+        Converts to a frequency ratio and applies to all voices.
+        """
+        # value 0.0 = full down, 0.5 = center, 1.0 = full up
+        semitones = (value - 0.5) * 2.0 * self.PITCH_BEND_RANGE_SEMITONES
+        ratio = 2.0 ** (semitones / 12.0)
+        for voice in self.voices:
+            voice.set_pitch_bend(ratio)
+
+    def set_mod_wheel(self, value: float) -> None:
+        """Set mod wheel depth (0.0-1.0) on all voices."""
+        for voice in self.voices:
+            voice.set_mod_wheel(value)
+
+    def set_operator_enabled(self, op_index: int, enabled: bool) -> None:
+        """Enable/disable an operator (0-5) on all voices."""
+        for voice in self.voices:
+            voice.set_operator_enabled(op_index, enabled)
+
+    def set_algorithm(self, algorithm: int) -> None:
+        """Change the algorithm (0-31) on all voices."""
+        algorithm = algorithm % 32
+        for voice in self.voices:
+            voice.algorithm = algorithm
+
+    # ------------------------------------------------------------------
     # Note on / off
     # ------------------------------------------------------------------
 

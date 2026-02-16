@@ -74,6 +74,17 @@ OP_MODULATOR_COLOR = "#4A90B8"  # Modulator operator highlight
 ALGO_LINE_COLOR = "#A09080"   # Algorithm connection lines
 ALGO_BG = "#1A1714"           # Algorithm display background
 
+# 7-segment display
+SEVEN_SEG_BG = "#1A0000"        # Very dark red background
+SEVEN_SEG_ON = "#FF2020"        # Bright red lit segments
+SEVEN_SEG_OFF = "#2A0808"       # Dim unlit segments
+SEVEN_SEG_GLOW = "#FF4040"      # Glow effect
+
+# Wheels
+WHEEL_COLOR = "#2A2520"         # Wheel body
+WHEEL_HIGHLIGHT = "#4A4540"     # Wheel highlight
+WHEEL_TRACK = "#1A1714"         # Wheel track/groove
+
 # ---------------------------------------------------------------------------
 # Fonts
 # ---------------------------------------------------------------------------
@@ -94,47 +105,54 @@ KEY_LABEL_FONT = ("Helvetica", 6)
 # Dimensions
 # ---------------------------------------------------------------------------
 
-# Overall window
+# Overall window - wider and taller
 WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 580
+WINDOW_HEIGHT = 680
 
 # Header strip
 HEADER_HEIGHT = 36
 
-# LCD display
+# Piano keyboard
+KEYBOARD_HEIGHT = 120
+WHITE_KEY_WIDTH = 22
+WHITE_KEY_HEIGHT = 112
+BLACK_KEY_WIDTH = 14
+BLACK_KEY_HEIGHT = 68
+
+# Wheels area to the left of keyboard
+WHEEL_AREA_WIDTH = 80
+
+# LCD display - keep same
 LCD_WIDTH = 320
 LCD_HEIGHT = 80
-LCD_CHAR_WIDTH = 16    # Characters per line
-LCD_LINES = 2          # Number of text lines
-LCD_BEZEL = 6          # Bezel border thickness
+LCD_CHAR_WIDTH = 16
+LCD_LINES = 2
+LCD_BEZEL = 6
 
 # Algorithm display
-ALGO_DISPLAY_WIDTH = 120
-ALGO_DISPLAY_HEIGHT = 90
+ALGO_DISPLAY_WIDTH = 130
+ALGO_DISPLAY_HEIGHT = 100
 
 # Operator buttons
-OP_BUTTON_SIZE = 32
+OP_BUTTON_SIZE = 34
 OP_LED_RADIUS = 4
 
 # Membrane buttons
-MEMBRANE_BUTTON_WIDTH = 58
-MEMBRANE_BUTTON_HEIGHT = 26
-MEMBRANE_BUTTON_RADIUS = 3    # Corner rounding
+MEMBRANE_BUTTON_WIDTH = 56
+MEMBRANE_BUTTON_HEIGHT = 28
+MEMBRANE_BUTTON_RADIUS = 3
 
-# Preset buttons
-PRESET_BUTTON_SIZE = 28
-
-# Piano keyboard
-KEYBOARD_HEIGHT = 100
-WHITE_KEY_WIDTH = 24
-WHITE_KEY_HEIGHT = 92
-BLACK_KEY_WIDTH = 15
-BLACK_KEY_HEIGHT = 55
+# Preset buttons - 4 rows of 8
+PRESET_BUTTON_SIZE = 30
 
 # Slider
-SLIDER_WIDTH = 26
-SLIDER_HEIGHT = 140
+SLIDER_WIDTH = 28
+SLIDER_HEIGHT = 100
 SLIDER_HANDLE_HEIGHT = 14
+
+# 7-segment display
+SEVEN_SEG_WIDTH = 80
+SEVEN_SEG_HEIGHT = 50
 
 # Spacing
 SECTION_PAD_X = 8

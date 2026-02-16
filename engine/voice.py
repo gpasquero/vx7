@@ -119,6 +119,11 @@ class Voice:
         self._gate: bool = False
         self._age: int = 0  # increments each render call (for voice stealing)
 
+        # Real-time controllers.
+        self._pitch_bend_ratio: float = 1.0   # frequency multiplier (1.0 = center)
+        self._mod_wheel: float = 0.0           # 0.0 - 1.0
+        self._op_enabled: list[bool] = [True] * 6  # per-operator mute
+
         # Load default preset.
         self.load_preset(_default_preset())
 
@@ -228,6 +233,27 @@ class Voice:
     # Rendering
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Real-time controllers
+    # ------------------------------------------------------------------
+
+    def set_pitch_bend(self, ratio: float) -> None:
+        """Set pitch bend as a frequency multiplier (1.0 = center)."""
+        self._pitch_bend_ratio = ratio
+
+    def set_mod_wheel(self, value: float) -> None:
+        """Set mod wheel depth (0.0 - 1.0)."""
+        self._mod_wheel = max(0.0, min(1.0, value))
+
+    def set_operator_enabled(self, op_index: int, enabled: bool) -> None:
+        """Enable or disable an operator (0-5)."""
+        if 0 <= op_index < 6:
+            self._op_enabled[op_index] = enabled
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+
     def render(self, num_samples: int) -> np.ndarray:
         """Generate *num_samples* of audio for this voice.
 
@@ -241,8 +267,21 @@ class Voice:
 
         self._age += 1
 
-        # Generate LFO modulation.
-        pitch_mod, amp_mod = self.lfo.render(num_samples)
+        # Generate LFO modulation (mod wheel adds extra PMD).
+        pitch_mod, amp_mod = self.lfo.render(
+            num_samples, extra_pmd=self._mod_wheel,
+        )
+
+        # Build per-sample frequency ratio from pitch bend + LFO pitch mod.
+        freq_ratio = np.full(num_samples, self._pitch_bend_ratio,
+                             dtype=np.float64)
+
+        # Apply LFO pitch modulation.
+        # pitch_mod is bipolar (-1..+1) scaled by PMD/99.
+        # DX7 full PMD range is roughly +/- 1 octave (12 semitones).
+        if np.any(pitch_mod != 0):
+            pm_semitones = pitch_mod * 12.0
+            freq_ratio = freq_ratio * (2.0 ** (pm_semitones / 12.0))
 
         # Render through the algorithm.
         output = apply_algorithm(
@@ -255,6 +294,8 @@ class Voice:
             feedback_buffers=self._feedback_buffers,
             pitch_mod=pitch_mod,
             amp_mod=amp_mod,
+            freq_ratio=freq_ratio,
+            op_enabled=self._op_enabled,
         )
 
         # Check if voice has finished (all carrier envelopes idle).

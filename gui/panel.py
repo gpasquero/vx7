@@ -1,20 +1,25 @@
 """VX7 main control panel.
 
 Replicates the Yamaha DX7 Mk1 front-panel layout using tkinter Canvas widgets.
-The panel is arranged in horizontal sections from left to right, matching the
-real DX7 hardware:
+The panel uses a 2-row layout with pitch bend and modulation wheels to the left
+of the keyboard, and a 7-segment LED patch number display.
 
-    DATA ENTRY | LCD + MEMORY | EDIT/OPERATORS | ALGORITHM + PARAMS | MASTER
+    ROW 1: 7-SEG | LCD | ALGORITHM | OPERATOR SELECT | MASTER
+    ROW 2: DATA ENTRY | MEMORY SELECT | FUNCTION | PARAMETERS
+    KEYBOARD: WHEELS | PIANO KEYS (C1-C6)
 
 - Silver header strip with VX7 branding
+- 7-segment 2-digit red LED patch number display
 - LCD display with green-on-dark text
 - Algorithm topology diagram
 - Operator on/off toggles with LED indicators
-- Parameter editing buttons
-- Preset/memory selection grid (32 buttons in 2 rows of 16)
-- Function buttons (STORE, EDIT, etc.)
 - Master volume and tune sliders
-- Four-octave clickable piano keyboard (C2-C6)
+- Data entry slider with up/down buttons
+- Preset/memory selection grid (32 buttons in 4 rows of 8)
+- Function buttons (STORE, EDIT, COMPARE, ALGO+, ALGO-, INIT)
+- Parameter editing buttons (3x3 grid)
+- Pitch bend and modulation wheels
+- Five-octave clickable piano keyboard (C1-C6)
 """
 
 from __future__ import annotations
@@ -36,6 +41,8 @@ from .styles import (
     LED_ON, LED_OFF, LED_GLOW,
     OP_ON_COLOR, OP_OFF_COLOR, OP_CARRIER_COLOR, OP_MODULATOR_COLOR,
     ALGO_LINE_COLOR, ALGO_BG,
+    SEVEN_SEG_BG, SEVEN_SEG_ON, SEVEN_SEG_OFF, SEVEN_SEG_GLOW,
+    WHEEL_COLOR, WHEEL_HIGHLIGHT, WHEEL_TRACK,
     # Fonts
     LCD_FONT, LABEL_FONT, LABEL_FONT_BOLD, SECTION_FONT,
     BUTTON_FONT, BUTTON_FONT_SMALL,
@@ -50,6 +57,8 @@ from .styles import (
     BLACK_KEY_WIDTH, BLACK_KEY_HEIGHT,
     SLIDER_WIDTH, SLIDER_HEIGHT, SLIDER_HANDLE_HEIGHT,
     SECTION_PAD_X, SECTION_PAD_Y, BUTTON_GAP,
+    SEVEN_SEG_WIDTH, SEVEN_SEG_HEIGHT,
+    WHEEL_AREA_WIDTH,
     # Algorithm data
     ALGORITHMS,
 )
@@ -63,6 +72,25 @@ NoteOnCallback = Callable[[int, int], None]     # (note, velocity)
 NoteOffCallback = Callable[[int], None]          # (note,)
 PresetCallback = Callable[[int], None]           # (index,)
 ParamCallback = Callable[[str, object], None]    # (param_name, value)
+
+
+# ======================================================================
+# 7-segment digit encoding
+# ======================================================================
+# Segments: a=top, b=top-right, c=bottom-right, d=bottom,
+#           e=bottom-left, f=top-left, g=middle
+SEVEN_SEG_DIGITS = {
+    0: (1, 1, 1, 1, 1, 1, 0),
+    1: (0, 1, 1, 0, 0, 0, 0),
+    2: (1, 1, 0, 1, 1, 0, 1),
+    3: (1, 1, 1, 1, 0, 0, 1),
+    4: (0, 1, 1, 0, 0, 1, 1),
+    5: (1, 0, 1, 1, 0, 1, 1),
+    6: (1, 0, 1, 1, 1, 1, 1),
+    7: (1, 1, 1, 0, 0, 0, 0),
+    8: (1, 1, 1, 1, 1, 1, 1),
+    9: (1, 1, 1, 1, 0, 1, 1),
+}
 
 
 # ======================================================================
@@ -230,7 +258,7 @@ class MembraneButton:
 # ======================================================================
 
 class VX7Panel(tk.Frame):
-    """Main DX7-style control panel.
+    """Main DX7-style control panel with 2-row layout.
 
     Parameters
     ----------
@@ -253,6 +281,10 @@ class VX7Panel(tk.Frame):
         self._current_preset = 0
         self._pressed_keys: set[int] = set()
         self._volume = 0.8
+
+        # Wheel state.
+        self._pitch_bend = 0.5   # 0.5 = center
+        self._mod_wheel = 0.0    # 0.0 = bottom
 
         # Build the panel sections.
         self._build_header()
@@ -328,8 +360,9 @@ class VX7Panel(tk.Frame):
     def _build_main_area(self) -> None:
         """Build the controls area below the header.
 
-        Layout is horizontal, left to right:
-        DATA ENTRY | LCD + MEMORY | EDIT/OPERATORS | ALGORITHM + PARAMS | MASTER
+        Two-row layout:
+        ROW 1: 7-SEG | LCD | ALGORITHM | OPERATOR SELECT | MASTER
+        ROW 2: DATA ENTRY | MEMORY SELECT | FUNCTION | PARAMETERS
         """
         main_h = WINDOW_HEIGHT - HEADER_HEIGHT - KEYBOARD_HEIGHT
         self._main_canvas = tk.Canvas(
@@ -338,77 +371,170 @@ class VX7Panel(tk.Frame):
         )
         self._main_canvas.pack(fill="both", side="top")
 
-        # Build each horizontal section.
-        self._build_data_entry_section()
-        self._build_lcd_and_memory_section()
-        self._build_edit_operator_section()
-        self._build_algorithm_param_section()
+        # Separator between row 1 and row 2.
+        row2_y = 195
+        self._main_canvas.create_line(
+            10, row2_y - 5, WINDOW_WIDTH - 10, row2_y - 5,
+            fill=BORDER_COLOR, width=1,
+        )
+
+        # Build Row 1 sections.
+        self._build_seven_segment_display()
+        self._build_lcd_section()
+        self._build_algorithm_section()
+        self._build_operator_section()
         self._build_master_section()
 
+        # Build Row 2 sections.
+        self._build_data_entry_section()
+        self._build_memory_section()
+        self._build_function_section()
+        self._build_parameter_section()
+
     # ------------------------------------------------------------------
-    # Section 1: DATA ENTRY (far left) -- slider + up/down buttons
+    # ROW 1: 7-Segment Display (far left)
     # ------------------------------------------------------------------
 
-    def _build_data_entry_section(self) -> None:
-        """Vertical DATA ENTRY slider with YES/NO (up/down) buttons below."""
-        sx = 12
-        sy = 8
+    def _build_seven_segment_display(self) -> None:
+        """Two-digit 7-segment red LED display showing patch number (01-32)."""
+        sx = 15
+        sy = 15
 
         # Section label.
         self._main_canvas.create_text(
-            sx + 22, sy, text="DATA ENTRY", font=SECTION_FONT,
-            fill=SECTION_LABEL_COLOR, anchor="n",
+            sx + SEVEN_SEG_WIDTH // 2, sy - 2,
+            text="PATCH", font=SECTION_FONT,
+            fill=SECTION_LABEL_COLOR, anchor="s",
         )
 
-        # Background panel.
-        panel_w = 50
-        panel_h = SLIDER_HEIGHT + 80
-        _rounded_rect(
+        # Create the 7-segment canvas.
+        self._seg_canvas = tk.Canvas(
             self._main_canvas,
-            sx, sy + 14,
-            sx + panel_w, sy + 14 + panel_h,
-            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+            width=SEVEN_SEG_WIDTH, height=SEVEN_SEG_HEIGHT,
+            bg=SEVEN_SEG_BG, highlightthickness=1,
+            highlightbackground=BORDER_COLOR,
+        )
+        self._main_canvas.create_window(
+            sx, sy, window=self._seg_canvas, anchor="nw",
         )
 
-        # Data entry slider.
-        slider_x = sx + (panel_w - SLIDER_WIDTH) // 2
-        slider_y = sy + 24
-        self._build_slider(slider_x, slider_y, "data_entry", 0.5)
+        # Draw initial display (patch 01).
+        self._seg_items: list[list[int]] = [[], []]  # Two digits, each with 7 segments
+        self._draw_seven_seg_digits()
+        self.set_patch_number(1)
 
-        # UP arrow button (YES / increment).
+        # UP/DOWN arrow buttons below the 7-seg display for preset navigation.
         arrow_w = 36
-        arrow_h = 28
-        arrow_x = sx + (panel_w - arrow_w) // 2
-        arrow_y = sy + 24 + SLIDER_HEIGHT + 8
+        arrow_h = 24
+        arrow_x = sx + (SEVEN_SEG_WIDTH - arrow_w) // 2
+        arrow_y = sy + SEVEN_SEG_HEIGHT + 6
 
         MembraneButton(
             self._main_canvas,
             arrow_x, arrow_y,
             width=arrow_w, height=arrow_h,
             text="\u25B2", color=ACCENT_BLUE, active_color=ACCENT_BLUE_ACTIVE,
-            command=lambda: self.navigate_preset(-1),
-            font=("Helvetica", 11, "bold"),
+            command=lambda: self.navigate_preset(1),
+            font=("Helvetica", 10, "bold"),
             text_color="#FFFFFF",
         )
 
-        # DOWN arrow button (NO / decrement).
         MembraneButton(
             self._main_canvas,
-            arrow_x, arrow_y + arrow_h + 4,
+            arrow_x, arrow_y + arrow_h + 3,
             width=arrow_w, height=arrow_h,
             text="\u25BC", color=ACCENT_BLUE, active_color=ACCENT_BLUE_ACTIVE,
-            command=lambda: self.navigate_preset(1),
-            font=("Helvetica", 11, "bold"),
+            command=lambda: self.navigate_preset(-1),
+            font=("Helvetica", 10, "bold"),
             text_color="#FFFFFF",
         )
 
+    def _draw_seven_seg_digits(self) -> None:
+        """Create the segment line items for both digits on the 7-seg canvas."""
+        c = self._seg_canvas
+        # Digit dimensions.
+        dw = 18   # digit width
+        dh = 32   # digit height
+        seg_w = 3  # segment line width
+
+        # Positions: digit 0 (tens) at left, digit 1 (ones) at right.
+        digit_x_positions = [12, 48]
+        digit_y = (SEVEN_SEG_HEIGHT - dh) // 2
+
+        for d_idx, dx in enumerate(digit_x_positions):
+            dy = digit_y
+            segs = []
+
+            # Segment a: horizontal top
+            segs.append(c.create_line(
+                dx + 2, dy, dx + dw - 2, dy,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+            # Segment b: vertical top-right
+            segs.append(c.create_line(
+                dx + dw, dy + 2, dx + dw, dy + dh // 2 - 2,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+            # Segment c: vertical bottom-right
+            segs.append(c.create_line(
+                dx + dw, dy + dh // 2 + 2, dx + dw, dy + dh - 2,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+            # Segment d: horizontal bottom
+            segs.append(c.create_line(
+                dx + 2, dy + dh, dx + dw - 2, dy + dh,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+            # Segment e: vertical bottom-left
+            segs.append(c.create_line(
+                dx, dy + dh // 2 + 2, dx, dy + dh - 2,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+            # Segment f: vertical top-left
+            segs.append(c.create_line(
+                dx, dy + 2, dx, dy + dh // 2 - 2,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+            # Segment g: horizontal middle
+            segs.append(c.create_line(
+                dx + 2, dy + dh // 2, dx + dw - 2, dy + dh // 2,
+                fill=SEVEN_SEG_OFF, width=seg_w, capstyle="round",
+            ))
+
+            self._seg_items[d_idx] = segs
+
+    def set_patch_number(self, num: int) -> None:
+        """Update the 7-segment display to show a patch number (1-32).
+
+        Parameters
+        ----------
+        num : int
+            Patch number to display (1-32).
+        """
+        num = max(1, min(32, num))
+        tens = num // 10
+        ones = num % 10
+
+        c = self._seg_canvas
+        for seg_idx, on in enumerate(SEVEN_SEG_DIGITS.get(tens, (0,) * 7)):
+            color = SEVEN_SEG_ON if on else SEVEN_SEG_OFF
+            c.itemconfigure(self._seg_items[0][seg_idx], fill=color)
+
+        for seg_idx, on in enumerate(SEVEN_SEG_DIGITS.get(ones, (0,) * 7)):
+            color = SEVEN_SEG_ON if on else SEVEN_SEG_OFF
+            c.itemconfigure(self._seg_items[1][seg_idx], fill=color)
+
+    def update_patch_number(self, num: int) -> None:
+        """Public API alias for set_patch_number."""
+        self.set_patch_number(num)
+
     # ------------------------------------------------------------------
-    # Section 2: LCD + MEMORY SELECT (left-center)
+    # ROW 1: LCD Display
     # ------------------------------------------------------------------
 
-    def _build_lcd_and_memory_section(self) -> None:
-        """LCD display at top, 32 preset buttons in 2 rows of 16 below."""
-        sx = 72
+    def _build_lcd_section(self) -> None:
+        """LCD display section."""
+        sx = 110
         sy = 8
 
         # Section label.
@@ -427,122 +553,54 @@ class VX7Panel(tk.Frame):
         self._lcd.set_patch(1, "INIT VOICE")
         self._lcd.set_line2("VX7 Ready")
 
-        # MEMORY SELECT label.
-        mem_y = sy + 14 + 92 + 8  # Below LCD (LCD is ~92px with bezel)
-        self._main_canvas.create_text(
-            sx, mem_y, text="MEMORY SELECT", font=SECTION_FONT,
-            fill=SECTION_LABEL_COLOR, anchor="nw",
-        )
-
-        # 32 preset buttons in 2 rows of 16.
-        bs = PRESET_BUTTON_SIZE + 2  # button + gap
-        preset_y = mem_y + 14
-
-        # Background panel for presets.
-        panel_w = 16 * bs + 8
-        panel_h = 2 * bs + 8
-        _rounded_rect(
-            self._main_canvas,
-            sx - 4, preset_y - 4,
-            sx + panel_w, preset_y + panel_h,
-            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
-        )
-
-        self._preset_buttons: list[MembraneButton] = []
-        for i in range(32):
-            col = i % 16
-            row = i // 16
-            bx = sx + col * bs + 4
-            by = preset_y + row * bs + 4
-
-            def make_preset_cb(idx: int):
-                def cb():
-                    self._select_preset(idx)
-                return cb
-
-            btn = MembraneButton(
-                self._main_canvas,
-                bx, by,
-                width=PRESET_BUTTON_SIZE,
-                height=PRESET_BUTTON_SIZE,
-                text=str(i + 1),
-                color=BUTTON_COLOR, active_color=BUTTON_ACTIVE,
-                command=make_preset_cb(i),
-                font=PRESET_NUM_FONT,
-            )
-            self._preset_buttons.append(btn)
-
-        # Highlight the initially selected preset.
-        self._highlight_preset(0)
-
     # ------------------------------------------------------------------
-    # Section 3: EDIT / FUNCTION + OPERATORS (center)
+    # ROW 1: Algorithm Display
     # ------------------------------------------------------------------
 
-    def _build_edit_operator_section(self) -> None:
-        """Function buttons (STORE, EDIT, COMPARE) at top, operator toggles below."""
-        sx = 564
+    def _build_algorithm_section(self) -> None:
+        """Algorithm topology diagram."""
+        sx = 450
         sy = 8
 
-        # --- FUNCTION BUTTONS ---
         self._main_canvas.create_text(
-            sx, sy, text="FUNCTION", font=SECTION_FONT,
+            sx, sy, text="ALGORITHM", font=SECTION_FONT,
             fill=SECTION_LABEL_COLOR, anchor="nw",
         )
 
-        func_names = [
-            "STORE", "EDIT", "COMPARE",
-        ]
+        # Algorithm number shown next to the label, outside the diagram.
+        self._algo_num_label = self._main_canvas.create_text(
+            sx + ALGO_DISPLAY_WIDTH, sy -5,
+            text="1", font=("Courier", 16, "bold"),
+            fill=LCD_TEXT, anchor="ne",
+        )
 
-        bw = MEMBRANE_BUTTON_WIDTH + 2
-        bh = MEMBRANE_BUTTON_HEIGHT + 2
-        func_y = sy + 14
-
-        # Background panel for function buttons.
-        func_panel_w = 3 * bw + 8
-        func_panel_h = bh + 8
-        _rounded_rect(
+        self._algo_canvas = tk.Canvas(
             self._main_canvas,
-            sx - 4, func_y - 4,
-            sx + func_panel_w, func_y + func_panel_h,
-            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+            width=ALGO_DISPLAY_WIDTH, height=ALGO_DISPLAY_HEIGHT,
+            bg=ALGO_BG, highlightthickness=1,
+            highlightbackground=BORDER_COLOR,
+        )
+        self._main_canvas.create_window(
+            sx, sy + 14, window=self._algo_canvas, anchor="nw",
         )
 
-        self._func_buttons: list[MembraneButton] = []
-        for i, name in enumerate(func_names):
-            bx = sx + i * bw + 4
-            by = func_y + 4
+        self.draw_algorithm(1)
 
-            is_accent = name == "STORE"
-            color = ACCENT_ORANGE if is_accent else ACCENT_BLUE
-            active = ACCENT_ORANGE_ACTIVE if is_accent else ACCENT_BLUE_ACTIVE
+    # ------------------------------------------------------------------
+    # ROW 1: Operator Select
+    # ------------------------------------------------------------------
 
-            def make_func_cb(func_name: str):
-                def cb():
-                    self._handle_function(func_name)
-                return cb
+    def _build_operator_section(self) -> None:
+        """6 operator toggle buttons with LED indicators."""
+        sx = 600
+        sy = 8
 
-            btn = MembraneButton(
-                self._main_canvas,
-                bx, by,
-                width=MEMBRANE_BUTTON_WIDTH,
-                height=MEMBRANE_BUTTON_HEIGHT,
-                text=name,
-                color=color, active_color=active,
-                command=make_func_cb(name),
-                font=BUTTON_FONT_SMALL,
-                text_color="#FFFFFF",
-            )
-            self._func_buttons.append(btn)
-
-        # --- OPERATOR SELECT ---
-        op_y = func_y + func_panel_h + 20
         self._main_canvas.create_text(
-            sx, op_y, text="OPERATOR SELECT", font=SECTION_FONT,
+            sx, sy, text="OPERATOR SELECT", font=SECTION_FONT,
             fill=SECTION_LABEL_COLOR, anchor="nw",
         )
 
-        op_btn_y = op_y + 14
+        op_btn_y = sy + 14
 
         # Background panel for operator buttons.
         op_panel_w = 6 * (OP_BUTTON_SIZE + BUTTON_GAP) + 12
@@ -590,23 +648,202 @@ class VX7Panel(tk.Frame):
             btn.state = True
             self._op_buttons.append(btn)
 
-        # --- Additional function row below operators: ALGO+, ALGO-, INIT ---
-        extra_y = op_btn_y + op_panel_h + 12
+        # Operator level label below.
+        self._main_canvas.create_text(
+            sx + op_panel_w // 2, op_btn_y + op_panel_h + 6,
+            text="1     2     3     4     5     6",
+            font=LABEL_FONT, fill=LABEL_COLOR, anchor="n",
+        )
 
-        extra_names = ["ALGO+", "ALGO-", "INIT"]
+    # ------------------------------------------------------------------
+    # ROW 1: Master (Volume + Tune sliders)
+    # ------------------------------------------------------------------
 
-        extra_panel_w = 3 * bw + 8
-        extra_panel_h = bh + 8
+    def _build_master_section(self) -> None:
+        """Volume slider and master tune slider on the far right."""
+        sx = 880
+        sy = 8
+
+        self._main_canvas.create_text(
+            sx + 70, sy, text="MASTER", font=SECTION_FONT,
+            fill=SECTION_LABEL_COLOR, anchor="n",
+        )
+
+        panel_w = 150
+        panel_h = SLIDER_HEIGHT + 50
         _rounded_rect(
             self._main_canvas,
-            sx - 4, extra_y - 4,
-            sx + extra_panel_w, extra_y + extra_panel_h,
+            sx, sy + 14,
+            sx + panel_w, sy + 14 + panel_h,
             radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
         )
 
-        for i, name in enumerate(extra_names):
+        # Volume slider.
+        vol_x = sx + 25
+        self._main_canvas.create_text(
+            vol_x + SLIDER_WIDTH // 2, sy + 28,
+            text="VOLUME", font=LABEL_FONT_BOLD,
+            fill=LABEL_COLOR, anchor="n",
+        )
+        self._build_slider(vol_x, sy + 42, "volume", self._volume)
+
+        # Tune slider.
+        tune_x = sx + 95
+        self._main_canvas.create_text(
+            tune_x + SLIDER_WIDTH // 2, sy + 28,
+            text="TUNE", font=LABEL_FONT_BOLD,
+            fill=LABEL_COLOR, anchor="n",
+        )
+        self._build_slider(tune_x, sy + 42, "tune", 0.5)
+
+    # ------------------------------------------------------------------
+    # ROW 2: Data Entry slider + up/down buttons
+    # ------------------------------------------------------------------
+
+    def _build_data_entry_section(self) -> None:
+        """Vertical DATA ENTRY slider."""
+        sx = 15
+        sy = 200
+
+        # Section label.
+        self._main_canvas.create_text(
+            sx + 25, sy, text="DATA ENTRY", font=SECTION_FONT,
+            fill=SECTION_LABEL_COLOR, anchor="n",
+        )
+
+        # Background panel.
+        panel_w = 52
+        panel_h = SLIDER_HEIGHT + 20
+        _rounded_rect(
+            self._main_canvas,
+            sx, sy + 14,
+            sx + panel_w, sy + 14 + panel_h,
+            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+        )
+
+        # Data entry slider.
+        slider_x = sx + (panel_w - SLIDER_WIDTH) // 2
+        slider_y = sy + 24
+        self._build_slider(slider_x, slider_y, "data_entry", 0.5)
+
+    # ------------------------------------------------------------------
+    # ROW 2: Memory Select (32 preset buttons in 4 rows of 8)
+    # ------------------------------------------------------------------
+
+    def _build_memory_section(self) -> None:
+        """32 preset buttons in 4 rows of 8."""
+        sx = 80
+        sy = 200
+
+        # Section label.
+        self._main_canvas.create_text(
+            sx, sy, text="MEMORY SELECT", font=SECTION_FONT,
+            fill=SECTION_LABEL_COLOR, anchor="nw",
+        )
+
+        bs = PRESET_BUTTON_SIZE + 2  # button + gap
+        preset_y = sy + 14
+
+        # Background panel for presets.
+        panel_w = 8 * bs + 8
+        panel_h = 4 * bs + 8
+        _rounded_rect(
+            self._main_canvas,
+            sx - 4, preset_y - 4,
+            sx + panel_w, preset_y + panel_h,
+            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+        )
+
+        self._preset_buttons: list[MembraneButton] = []
+        for i in range(32):
+            col = i % 8
+            row = i // 8
+            bx = sx + col * bs + 4
+            by = preset_y + row * bs + 4
+
+            def make_preset_cb(idx: int):
+                def cb():
+                    self._select_preset(idx)
+                return cb
+
+            btn = MembraneButton(
+                self._main_canvas,
+                bx, by,
+                width=PRESET_BUTTON_SIZE,
+                height=PRESET_BUTTON_SIZE,
+                text=str(i + 1),
+                color=BUTTON_COLOR, active_color=BUTTON_ACTIVE,
+                command=make_preset_cb(i),
+                font=PRESET_NUM_FONT,
+            )
+            self._preset_buttons.append(btn)
+
+        # Highlight the initially selected preset.
+        self._highlight_preset(0)
+
+    # ------------------------------------------------------------------
+    # ROW 2: Function buttons
+    # ------------------------------------------------------------------
+
+    def _build_function_section(self) -> None:
+        """Two rows of function buttons: STORE/EDIT/COMPARE, ALGO+/ALGO-/INIT."""
+        sx = 370
+        sy = 200
+
+        self._main_canvas.create_text(
+            sx, sy, text="FUNCTION", font=SECTION_FONT,
+            fill=SECTION_LABEL_COLOR, anchor="nw",
+        )
+
+        bw = MEMBRANE_BUTTON_WIDTH + 2
+        bh = MEMBRANE_BUTTON_HEIGHT + 2
+        func_y = sy + 14
+
+        # Background panel.
+        func_panel_w = 3 * bw + 8
+        func_panel_h = 2 * bh + 12
+        _rounded_rect(
+            self._main_canvas,
+            sx - 4, func_y - 4,
+            sx + func_panel_w, func_y + func_panel_h,
+            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+        )
+
+        self._func_buttons: list[MembraneButton] = []
+
+        # Row 1: STORE, EDIT, COMPARE
+        row1_names = ["STORE", "EDIT", "COMPARE"]
+        for i, name in enumerate(row1_names):
             bx = sx + i * bw + 4
-            by = extra_y + 4
+            by = func_y + 4
+
+            is_accent = name == "STORE"
+            color = ACCENT_ORANGE if is_accent else ACCENT_BLUE
+            active = ACCENT_ORANGE_ACTIVE if is_accent else ACCENT_BLUE_ACTIVE
+
+            def make_func_cb(func_name: str):
+                def cb():
+                    self._handle_function(func_name)
+                return cb
+
+            btn = MembraneButton(
+                self._main_canvas,
+                bx, by,
+                width=MEMBRANE_BUTTON_WIDTH,
+                height=MEMBRANE_BUTTON_HEIGHT,
+                text=name,
+                color=color, active_color=active,
+                command=make_func_cb(name),
+                font=BUTTON_FONT_SMALL,
+                text_color="#FFFFFF",
+            )
+            self._func_buttons.append(btn)
+
+        # Row 2: ALGO+, ALGO-, INIT
+        row2_names = ["ALGO+", "ALGO-", "INIT"]
+        for i, name in enumerate(row2_names):
+            bx = sx + i * bw + 4
+            by = func_y + bh + 8
 
             is_accent = name == "INIT"
             color = ACCENT_ORANGE if is_accent else ACCENT_BLUE
@@ -629,6 +866,71 @@ class VX7Panel(tk.Frame):
                 text_color="#FFFFFF",
             )
             self._func_buttons.append(btn)
+
+    # ------------------------------------------------------------------
+    # ROW 2: Parameter buttons (3x3 grid)
+    # ------------------------------------------------------------------
+
+    def _build_parameter_section(self) -> None:
+        """3x3 grid of parameter editing buttons."""
+        sx = 570
+        sy = 200
+
+        self._main_canvas.create_text(
+            sx, sy, text="PARAMETERS", font=SECTION_FONT,
+            fill=SECTION_LABEL_COLOR, anchor="nw",
+        )
+
+        param_names = [
+            "OUTPUT\nLEVEL", "FREQ\nCOARSE", "FREQ\nFINE",
+            "ENVELOPE", "KBD\nSCALE", "MOD\nSENS",
+            "DETUNE", "ENV\nRATE", "ENV\nLEVEL",
+        ]
+
+        cols = 3
+        rows = 3
+        bw = MEMBRANE_BUTTON_WIDTH + 2
+        bh = MEMBRANE_BUTTON_HEIGHT + 2
+        panel_w = cols * bw + 8
+        panel_h = rows * bh + 8
+
+        param_btn_y = sy + 14
+        _rounded_rect(
+            self._main_canvas,
+            sx - 4, param_btn_y - 4,
+            sx + panel_w, param_btn_y + panel_h,
+            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+        )
+
+        self._param_buttons: list[MembraneButton] = []
+        for i, name in enumerate(param_names):
+            col = i % cols
+            row = i // cols
+            bx = sx + col * bw + 4
+            by = param_btn_y + row * bh + 4
+
+            def make_param_cb(param_name: str):
+                def cb():
+                    if self._on_param_change:
+                        self._on_param_change(param_name, None)
+                    self._lcd.set_line2(param_name.replace("\n", " "))
+                return cb
+
+            btn = MembraneButton(
+                self._main_canvas,
+                bx, by,
+                width=MEMBRANE_BUTTON_WIDTH,
+                height=MEMBRANE_BUTTON_HEIGHT,
+                text=name,
+                color=BUTTON_COLOR, active_color=BUTTON_ACTIVE,
+                command=make_param_cb(name),
+                font=BUTTON_FONT_SMALL,
+            )
+            self._param_buttons.append(btn)
+
+    # ------------------------------------------------------------------
+    # Operator toggle logic
+    # ------------------------------------------------------------------
 
     def _toggle_operator(self, index: int) -> None:
         """Toggle an operator on/off."""
@@ -673,94 +975,6 @@ class VX7Panel(tk.Frame):
             self._lcd.set_line2("COMPARE")
         if self._on_param_change:
             self._on_param_change(f"func_{name.lower()}", True)
-
-    # ------------------------------------------------------------------
-    # Section 4: ALGORITHM + PARAMETERS (right)
-    # ------------------------------------------------------------------
-
-    def _build_algorithm_param_section(self) -> None:
-        """Algorithm display at top, parameter editing buttons below."""
-        sx = 760
-        sy = 8
-
-        # --- ALGORITHM DISPLAY ---
-        self._main_canvas.create_text(
-            sx, sy, text="ALGORITHM", font=SECTION_FONT,
-            fill=SECTION_LABEL_COLOR, anchor="nw",
-        )
-
-        self._algo_canvas = tk.Canvas(
-            self._main_canvas,
-            width=ALGO_DISPLAY_WIDTH, height=ALGO_DISPLAY_HEIGHT,
-            bg=ALGO_BG, highlightthickness=1,
-            highlightbackground=BORDER_COLOR,
-        )
-        self._main_canvas.create_window(
-            sx, sy + 14, window=self._algo_canvas, anchor="nw",
-        )
-
-        # Algorithm number label.
-        self._algo_num_label = self._algo_canvas.create_text(
-            ALGO_DISPLAY_WIDTH - 6, 8,
-            text="1", font=("Courier", 14, "bold"),
-            fill=LCD_TEXT, anchor="ne",
-        )
-
-        self.draw_algorithm(1)
-
-        # --- PARAMETER BUTTONS ---
-        param_y = sy + 14 + ALGO_DISPLAY_HEIGHT + 12
-        self._main_canvas.create_text(
-            sx, param_y, text="PARAMETERS", font=SECTION_FONT,
-            fill=SECTION_LABEL_COLOR, anchor="nw",
-        )
-
-        param_names = [
-            "OUTPUT\nLEVEL", "FREQ\nCOARSE", "FREQ\nFINE",
-            "ENVELOPE", "KBD\nSCALE", "MOD\nSENS",
-            "DETUNE", "ENV\nRATE", "ENV\nLEVEL",
-        ]
-
-        cols = 3
-        rows = 3
-        bw = MEMBRANE_BUTTON_WIDTH + 2
-        bh = MEMBRANE_BUTTON_HEIGHT + 2
-        panel_w = cols * bw + 8
-        panel_h = rows * bh + 8
-
-        param_btn_y = param_y + 14
-        _rounded_rect(
-            self._main_canvas,
-            sx - 4, param_btn_y - 4,
-            sx + panel_w, param_btn_y + panel_h,
-            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
-        )
-
-        self._param_buttons: list[MembraneButton] = []
-        for i, name in enumerate(param_names):
-            col = i % cols
-            row = i // cols
-            bx = sx + col * bw + 4
-            by = param_btn_y + row * bh + 4
-
-            def make_param_cb(param_name: str):
-                def cb():
-                    if self._on_param_change:
-                        self._on_param_change(param_name, None)
-                    self._lcd.set_line2(param_name.replace("\n", " "))
-                return cb
-
-            btn = MembraneButton(
-                self._main_canvas,
-                bx, by,
-                width=MEMBRANE_BUTTON_WIDTH,
-                height=MEMBRANE_BUTTON_HEIGHT,
-                text=name,
-                color=BUTTON_COLOR, active_color=BUTTON_ACTIVE,
-                command=make_param_cb(name),
-                font=BUTTON_FONT_SMALL,
-            )
-            self._param_buttons.append(btn)
 
     # ------------------------------------------------------------------
     # Algorithm drawing
@@ -841,50 +1055,9 @@ class VX7Panel(tk.Frame):
                 tags="algo_drawing",
             )
 
-        # Update the algorithm number.
-        c.itemconfigure(self._algo_num_label, text=str(algo_num))
-        c.tag_raise(self._algo_num_label)
-
-    # ------------------------------------------------------------------
-    # Section 5: MASTER (far right) -- volume + tune sliders
-    # ------------------------------------------------------------------
-
-    def _build_master_section(self) -> None:
-        """Volume slider and master tune slider on the far right."""
-        sx = 960
-        sy = 8
-
-        self._main_canvas.create_text(
-            sx + 100, sy, text="MASTER", font=SECTION_FONT,
-            fill=SECTION_LABEL_COLOR, anchor="n",
-        )
-
-        panel_w = 200
-        panel_h = SLIDER_HEIGHT + 50
-        _rounded_rect(
-            self._main_canvas,
-            sx, sy + 14,
-            sx + panel_w, sy + 14 + panel_h,
-            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
-        )
-
-        # Volume slider.
-        vol_x = sx + 40
-        self._main_canvas.create_text(
-            vol_x + SLIDER_WIDTH // 2, sy + 28,
-            text="VOLUME", font=LABEL_FONT_BOLD,
-            fill=LABEL_COLOR, anchor="n",
-        )
-        self._build_slider(vol_x, sy + 42, "volume", self._volume)
-
-        # Tune slider.
-        tune_x = sx + 130
-        self._main_canvas.create_text(
-            tune_x + SLIDER_WIDTH // 2, sy + 28,
-            text="TUNE", font=LABEL_FONT_BOLD,
-            fill=LABEL_COLOR, anchor="n",
-        )
-        self._build_slider(tune_x, sy + 42, "tune", 0.5)
+        # Update the algorithm number (label lives on main_canvas, not algo_canvas).
+        self._main_canvas.itemconfigure(self._algo_num_label, text=str(algo_num))
+        self._main_canvas.tag_raise(self._algo_num_label)
 
     # ------------------------------------------------------------------
     # Slider builder (shared by DATA ENTRY and MASTER sections)
@@ -985,6 +1158,8 @@ class VX7Panel(tk.Frame):
         old = self._current_preset
         self._current_preset = index
         self._highlight_preset(index, old)
+        # Update 7-segment display.
+        self.set_patch_number(index + 1)
         if self._on_preset_change:
             self._on_preset_change(index)
 
@@ -1007,11 +1182,11 @@ class VX7Panel(tk.Frame):
         self._select_preset(new_index)
 
     # ==================================================================
-    # Piano keyboard
+    # Piano keyboard + Wheels
     # ==================================================================
 
     def _build_keyboard(self) -> None:
-        """Build the 4-octave clickable piano keyboard (C2-C6 = MIDI 36-96)."""
+        """Build the piano keyboard with pitch bend and mod wheels to the left."""
         self._kb_canvas = tk.Canvas(
             self, width=WINDOW_WIDTH, height=KEYBOARD_HEIGHT,
             bg=PANEL_COLOR, highlightthickness=0,
@@ -1023,14 +1198,250 @@ class VX7Panel(tk.Frame):
             0, 0, WINDOW_WIDTH, 0, fill=BORDER_COLOR, width=2,
         )
 
-        # The keyboard spans C2 (MIDI 36) to C6 (MIDI 96) = 4 octaves + 1.
-        self._midi_start = 36  # C2
-        self._midi_end = 96    # C6
+        # Build the wheels on the left side.
+        self._build_wheels()
+
+        # Build the piano keys to the right of the wheels.
+        self._build_piano_keys()
+
+    # ------------------------------------------------------------------
+    # Wheels (Pitch Bend + Mod)
+    # ------------------------------------------------------------------
+
+    def _build_wheels(self) -> None:
+        """Draw pitch bend and modulation wheels on the left side of the keyboard."""
+        c = self._kb_canvas
+
+        # Wheel area background.
+        _rounded_rect(
+            c, 4, 4, WHEEL_AREA_WIDTH - 4, KEYBOARD_HEIGHT - 4,
+            radius=4, fill=GROUP_BG, outline=BORDER_COLOR,
+        )
+
+        # --- Pitch Bend Wheel ---
+        pb_x = 10
+        pb_y = 14
+        pb_w = 24
+        pb_h = 42
+        track_h = pb_h
+
+        # Label.
+        c.create_text(
+            pb_x + pb_w // 2, pb_y - 4,
+            text="PITCH", font=("Helvetica", 6, "bold"),
+            fill=LABEL_COLOR, anchor="s",
+        )
+
+        # Track (groove).
+        c.create_rectangle(
+            pb_x + pb_w // 2 - 3, pb_y,
+            pb_x + pb_w // 2 + 3, pb_y + track_h,
+            fill=WHEEL_TRACK, outline=BORDER_COLOR,
+        )
+
+        # Center line marker.
+        center_y = pb_y + track_h // 2
+        c.create_line(
+            pb_x + 2, center_y, pb_x + pb_w - 2, center_y,
+            fill=BORDER_COLOR, width=1, dash=(2, 2),
+        )
+
+        # Wheel handle (starts at center for pitch bend).
+        handle_h = 12
+        handle_init_y = center_y - handle_h // 2
+        self._pb_handle = _rounded_rect(
+            c,
+            pb_x + 2, handle_init_y,
+            pb_x + pb_w - 2, handle_init_y + handle_h,
+            radius=3, fill=WHEEL_COLOR, outline=WHEEL_HIGHLIGHT,
+        )
+        # Grip line on handle.
+        self._pb_grip = c.create_line(
+            pb_x + 6, handle_init_y + handle_h // 2,
+            pb_x + pb_w - 6, handle_init_y + handle_h // 2,
+            fill=WHEEL_HIGHLIGHT, width=1,
+        )
+
+        # Pitch bend drag data.
+        self._pb_data = {
+            "x": pb_x, "w": pb_w, "y_top": pb_y, "y_bot": pb_y + track_h,
+            "handle_h": handle_h, "center_y": center_y,
+            "dragging": False, "spring_back": True,
+            "current_y": handle_init_y,  # track handle top-y for move()
+        }
+
+        # Bind pitch bend events.
+        c.tag_bind(self._pb_handle, "<ButtonPress-1>", self._pb_press)
+        c.tag_bind(self._pb_handle, "<B1-Motion>", self._pb_drag)
+        c.tag_bind(self._pb_handle, "<ButtonRelease-1>", self._pb_release)
+        c.tag_bind(self._pb_grip, "<ButtonPress-1>", self._pb_press)
+        c.tag_bind(self._pb_grip, "<B1-Motion>", self._pb_drag)
+        c.tag_bind(self._pb_grip, "<ButtonRelease-1>", self._pb_release)
+
+        # --- Modulation Wheel ---
+        mod_x = 46
+        mod_y = 14
+        mod_w = 24
+        mod_h = 42
+        mod_track_h = mod_h
+
+        # Label.
+        c.create_text(
+            mod_x + mod_w // 2, mod_y - 4,
+            text="MOD", font=("Helvetica", 6, "bold"),
+            fill=LABEL_COLOR, anchor="s",
+        )
+
+        # Track (groove).
+        c.create_rectangle(
+            mod_x + mod_w // 2 - 3, mod_y,
+            mod_x + mod_w // 2 + 3, mod_y + mod_track_h,
+            fill=WHEEL_TRACK, outline=BORDER_COLOR,
+        )
+
+        # Wheel handle (starts at bottom for mod wheel).
+        mod_handle_h = 12
+        mod_handle_init_y = mod_y + mod_track_h - mod_handle_h
+        self._mod_handle = _rounded_rect(
+            c,
+            mod_x + 2, mod_handle_init_y,
+            mod_x + mod_w - 2, mod_handle_init_y + mod_handle_h,
+            radius=3, fill=WHEEL_COLOR, outline=WHEEL_HIGHLIGHT,
+        )
+        # Grip line.
+        self._mod_grip = c.create_line(
+            mod_x + 6, mod_handle_init_y + mod_handle_h // 2,
+            mod_x + mod_w - 6, mod_handle_init_y + mod_handle_h // 2,
+            fill=WHEEL_HIGHLIGHT, width=1,
+        )
+
+        # Mod wheel drag data.
+        self._mod_data = {
+            "x": mod_x, "w": mod_w, "y_top": mod_y, "y_bot": mod_y + mod_track_h,
+            "handle_h": mod_handle_h,
+            "dragging": False, "spring_back": False,
+            "current_y": mod_handle_init_y,  # track handle top-y for move()
+        }
+
+        # Bind mod wheel events.
+        c.tag_bind(self._mod_handle, "<ButtonPress-1>", self._mod_press)
+        c.tag_bind(self._mod_handle, "<B1-Motion>", self._mod_drag)
+        c.tag_bind(self._mod_handle, "<ButtonRelease-1>", self._mod_release)
+        c.tag_bind(self._mod_grip, "<ButtonPress-1>", self._mod_press)
+        c.tag_bind(self._mod_grip, "<B1-Motion>", self._mod_drag)
+        c.tag_bind(self._mod_grip, "<ButtonRelease-1>", self._mod_release)
+
+        # ---- Additional visual: scale markings on wheels ----
+        # Pitch bend scale marks.
+        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+            mark_y = pb_y + int(track_h * frac)
+            c.create_line(
+                pb_x, mark_y, pb_x + 2, mark_y,
+                fill=LABEL_COLOR, width=1,
+            )
+
+        # Mod wheel scale marks.
+        for frac in (0.0, 0.25, 0.5, 0.75, 1.0):
+            mark_y = mod_y + int(mod_track_h * frac)
+            c.create_line(
+                mod_x, mark_y, mod_x + 2, mark_y,
+                fill=LABEL_COLOR, width=1,
+            )
+
+        # ---- Labels below wheels ----
+        c.create_text(
+            WHEEL_AREA_WIDTH // 2, KEYBOARD_HEIGHT - 8,
+            text="WHEELS", font=("Helvetica", 6),
+            fill=LABEL_COLOR, anchor="s",
+        )
+
+    def _pb_press(self, _event: tk.Event) -> None:
+        self._pb_data["dragging"] = True
+
+    def _pb_drag(self, event: tk.Event) -> None:
+        if not self._pb_data["dragging"]:
+            return
+        data = self._pb_data
+        c = self._kb_canvas
+        hh = data["handle_h"]
+        ny = max(data["y_top"], min(data["y_bot"] - hh, event.y - hh // 2))
+
+        # Move handle and grip by delta (preserves the rounded polygon shape).
+        dy = ny - data["current_y"]
+        if dy != 0:
+            c.move(self._pb_handle, 0, dy)
+            c.move(self._pb_grip, 0, dy)
+            data["current_y"] = ny
+
+        # Calculate pitch bend value (0.0=bottom, 1.0=top, 0.5=center).
+        total_range = data["y_bot"] - hh - data["y_top"]
+        if total_range > 0:
+            self._pitch_bend = 1.0 - (ny - data["y_top"]) / total_range
+        if self._on_param_change:
+            self._on_param_change("pitch_bend", self._pitch_bend)
+
+    def _pb_release(self, _event: tk.Event) -> None:
+        self._pb_data["dragging"] = False
+        if self._pb_data["spring_back"]:
+            # Spring back to center.
+            data = self._pb_data
+            c = self._kb_canvas
+            hh = data["handle_h"]
+            target_y = data["center_y"] - hh // 2
+
+            dy = target_y - data["current_y"]
+            if dy != 0:
+                c.move(self._pb_handle, 0, dy)
+                c.move(self._pb_grip, 0, dy)
+                data["current_y"] = target_y
+
+            self._pitch_bend = 0.5
+            if self._on_param_change:
+                self._on_param_change("pitch_bend", 0.5)
+
+    def _mod_press(self, _event: tk.Event) -> None:
+        self._mod_data["dragging"] = True
+
+    def _mod_drag(self, event: tk.Event) -> None:
+        if not self._mod_data["dragging"]:
+            return
+        data = self._mod_data
+        c = self._kb_canvas
+        hh = data["handle_h"]
+        ny = max(data["y_top"], min(data["y_bot"] - hh, event.y - hh // 2))
+
+        # Move handle and grip by delta (preserves the rounded polygon shape).
+        dy = ny - data["current_y"]
+        if dy != 0:
+            c.move(self._mod_handle, 0, dy)
+            c.move(self._mod_grip, 0, dy)
+            data["current_y"] = ny
+
+        # Calculate mod value (0.0=bottom, 1.0=top).
+        total_range = data["y_bot"] - hh - data["y_top"]
+        if total_range > 0:
+            self._mod_wheel = 1.0 - (ny - data["y_top"]) / total_range
+        if self._on_param_change:
+            self._on_param_change("mod_wheel", self._mod_wheel)
+
+    def _mod_release(self, _event: tk.Event) -> None:
+        self._mod_data["dragging"] = False
+        # Mod wheel does NOT spring back -- stays where you leave it.
+
+    # ------------------------------------------------------------------
+    # Piano keys
+    # ------------------------------------------------------------------
+
+    def _build_piano_keys(self) -> None:
+        """Build the 5-octave clickable piano keyboard (C1-C6 = MIDI 36-96)."""
+        c = self._kb_canvas
+
+        # The keyboard spans C1 (MIDI 36) to C6 (MIDI 96) = 5 octaves + 1.
+        self._midi_start = 36  # C1 (MIDI 36)
+        self._midi_end = 96    # C6 (MIDI 96)
 
         # Map MIDI note -> is_black.
-        # Pattern in one octave: W B W B W W B W B W B W
-        #                        C C#D D#E F F#G G#A A#B
-        self._black_pattern = {1, 3, 6, 8, 10}  # semitone offsets for black keys
+        self._black_pattern = {1, 3, 6, 8, 10}
 
         # Determine white keys in range.
         white_notes: list[int] = []
@@ -1048,13 +1459,14 @@ class VX7Panel(tk.Frame):
         kw = WHITE_KEY_WIDTH
         kh = WHITE_KEY_HEIGHT
 
-        # Center the keyboard.
+        # Offset keyboard to the right of the wheel area.
         total_kb_width = num_white * kw
-        x_offset = (WINDOW_WIDTH - total_kb_width) // 2
+        available_width = WINDOW_WIDTH - WHEEL_AREA_WIDTH
+        x_offset = WHEEL_AREA_WIDTH + (available_width - total_kb_width) // 2
         y_offset = 4
 
         # Draw white keys first.
-        self._key_rects: dict[int, int] = {}  # midi_note -> canvas rect id
+        self._key_rects: dict[int, int] = {}
         self._key_colors: dict[int, str] = {}
 
         for i, note in enumerate(white_notes):
@@ -1063,38 +1475,30 @@ class VX7Panel(tk.Frame):
             x1 = x0 + kw - 1
             y1 = y0 + kh
 
-            rect = self._kb_canvas.create_rectangle(
+            rect = c.create_rectangle(
                 x0, y0, x1, y1,
                 fill=WHITE_KEY, outline=KEY_BORDER, width=1,
             )
             self._key_rects[note] = rect
             self._key_colors[note] = WHITE_KEY
 
-            # Note name label at bottom of key.
-            note_names = ["C", "D", "E", "F", "G", "A", "B"]
+            # Note name label at bottom of key (C notes only).
             white_idx = [0, 2, 4, 5, 7, 9, 11]
             semi = note % 12
-            if semi in white_idx:
-                nname = note_names[white_idx.index(semi)]
+            if semi == 0:  # C note
                 octave = (note // 12) - 1
-                if nname == "C":
-                    self._kb_canvas.create_text(
-                        x0 + kw // 2, y1 - 10,
-                        text=f"C{octave}", font=KEY_LABEL_FONT,
-                        fill="#999999",
-                    )
+                c.create_text(
+                    x0 + kw // 2, y1 - 10,
+                    text=f"C{octave}", font=KEY_LABEL_FONT,
+                    fill="#999999",
+                )
 
         # Draw black keys on top.
-        # Black key positions relative to the white key they sit between.
-        # C#: between C and D, D#: between D and E, F#: between F and G,
-        # G#: between G and A, A#: between A and B.
-        # We compute the x position based on the white key index.
         white_midi = {n: i for i, n in enumerate(white_notes)}
 
-        # For each black key, find which white key is just below it.
         black_to_left_white = {
             1: 0, 3: 2, 6: 5, 8: 7, 10: 9,
-        }  # black semitone -> white semitone to its left
+        }
 
         bkw = BLACK_KEY_WIDTH
         bkh = BLACK_KEY_HEIGHT
@@ -1106,19 +1510,18 @@ class VX7Panel(tk.Frame):
             if left_white_note not in white_midi:
                 continue
             wi = white_midi[left_white_note]
-            # Black key center is at the right edge of the left white key.
             cx = x_offset + (wi + 1) * kw
             x0 = cx - bkw // 2
             y0 = y_offset
             x1 = x0 + bkw
             y1 = y0 + bkh
 
-            rect = self._kb_canvas.create_rectangle(
+            rect = c.create_rectangle(
                 x0, y0, x1, y1,
                 fill=BLACK_KEY, outline="#000000", width=1,
             )
             # Subtle highlight at top of black key.
-            self._kb_canvas.create_line(
+            c.create_line(
                 x0 + 2, y0 + 2, x1 - 2, y0 + 2,
                 fill="#3A3530", width=1,
             )
@@ -1127,17 +1530,17 @@ class VX7Panel(tk.Frame):
 
         # Bind mouse events for all keys.
         for note, rect in self._key_rects.items():
-            self._kb_canvas.tag_bind(
+            c.tag_bind(
                 rect, "<ButtonPress-1>",
                 lambda e, n=note: self._key_press(n),
             )
-            self._kb_canvas.tag_bind(
+            c.tag_bind(
                 rect, "<ButtonRelease-1>",
                 lambda e, n=note: self._key_release(n),
             )
 
         # Also handle mouse leaving the keyboard while pressed.
-        self._kb_canvas.bind("<ButtonRelease-1>", self._key_release_all)
+        c.bind("<ButtonRelease-1>", self._key_release_all)
 
     def _key_press(self, note: int) -> None:
         """Handle mouse-down on a piano key."""
@@ -1198,6 +1601,8 @@ class VX7Panel(tk.Frame):
         self._current_preset = index
         self._highlight_preset(index, old)
         self._lcd.set_patch(index + 1, name)
+        # Update 7-segment display.
+        self.set_patch_number(index + 1)
 
     def update_algorithm(self, algo_num: int) -> None:
         """Redraw the algorithm display."""

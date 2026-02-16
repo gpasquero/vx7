@@ -122,12 +122,12 @@ class VX7App:
             self._panel._key_release(note)
 
     def _on_preset_up(self, _event: tk.Event) -> None:
-        """Arrow Up -> previous preset."""
-        self._panel.navigate_preset(-1)
+        """Arrow Up -> next preset (higher number)."""
+        self._panel.navigate_preset(1)
 
     def _on_preset_down(self, _event: tk.Event) -> None:
-        """Arrow Down -> next preset."""
-        self._panel.navigate_preset(1)
+        """Arrow Down -> previous preset (lower number)."""
+        self._panel.navigate_preset(-1)
 
     # ------------------------------------------------------------------
     # Callback setters
@@ -172,6 +172,10 @@ class VX7App:
     def set_operator_state(self, op_index: int, enabled: bool) -> None:
         """Enable/disable an operator visually."""
         self._panel.set_operator_state(op_index, enabled)
+
+    def set_patch_number(self, num: int) -> None:
+        """Update the 7-segment patch number display."""
+        self._panel.set_patch_number(num)
 
     # ------------------------------------------------------------------
     # Access

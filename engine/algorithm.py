@@ -346,6 +346,8 @@ def apply_algorithm(
     feedback_buffers: Optional[list[np.ndarray]] = None,
     pitch_mod: Optional[np.ndarray] = None,
     amp_mod: Optional[np.ndarray] = None,
+    freq_ratio: Optional[np.ndarray] = None,
+    op_enabled: Optional[list[bool]] = None,
 ) -> np.ndarray:
     """Render audio for one block using the specified DX7 algorithm.
 
@@ -370,6 +372,12 @@ def apply_algorithm(
         LFO pitch modulation, shape (num_samples,), bipolar.
     amp_mod : np.ndarray, optional
         LFO amplitude modulation, shape (num_samples,), unipolar (1.0 = none).
+    freq_ratio : np.ndarray, optional
+        Per-sample frequency multiplier (pitch bend + LFO pitch mod),
+        shape (num_samples,).  Passed to each operator's render method.
+    op_enabled : list of bool, optional
+        Per-operator enable flags (length 6).  Disabled operators output
+        silence.  None means all enabled.
 
     Returns
     -------
@@ -396,6 +404,11 @@ def apply_algorithm(
     order = _RENDER_ORDERS[algorithm_index]
 
     for op_idx in order:
+        # Skip disabled operators.
+        if op_enabled is not None and not op_enabled[op_idx]:
+            op_outputs[op_idx] = np.zeros(num_samples, dtype=np.float64)
+            continue
+
         op = operators[op_idx]
 
         # Collect modulation input from already-rendered modulators.
@@ -416,7 +429,8 @@ def apply_algorithm(
         if is_fb_op:
             # Render with self-feedback.
             output = op.render_with_feedback(
-                num_samples, fb_level, feedback_buffers[op_idx]
+                num_samples, fb_level, feedback_buffers[op_idx],
+                freq_ratio=freq_ratio,
             )
             if is_carrier:
                 # render_with_feedback scales by mod_index; rescale to carrier
@@ -429,6 +443,7 @@ def apply_algorithm(
                 num_samples,
                 modulation=mod_input,
                 as_carrier=is_carrier,
+                freq_ratio=freq_ratio,
             )
 
         # Apply LFO amplitude modulation to carriers.
